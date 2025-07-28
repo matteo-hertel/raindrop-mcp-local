@@ -23,8 +23,10 @@ export const metadata: ToolMetadata = {
 // Tool implementation
 export default async function getUser({}: InferSchema<typeof schema>) {
   try {
-    const response = await apiClient.get<{result: boolean; user: User}>('/user');
-    
+    const response = await apiClient.get<{ result: boolean; user: User }>(
+      '/user'
+    );
+
     console.log('API Response:', JSON.stringify(response, null, 2));
 
     const user = response.user;

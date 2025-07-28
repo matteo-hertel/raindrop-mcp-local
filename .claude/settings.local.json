@@ -1,12 +1,4 @@
 {
-  "permissions": {
-    "allow": [
-      "mcp__raindrop__get_user",
-      "Bash(find:*)"
-    ]
-  },
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "raindrop"
-  ]
+  "enabledMcpjsonServers": ["raindrop"]
 }

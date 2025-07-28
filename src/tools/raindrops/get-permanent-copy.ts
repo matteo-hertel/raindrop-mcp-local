@@ -26,13 +26,13 @@ interface PermanentCopyResponse {
   result: boolean;
   cache?: {
     status:
-    | 'ready'
-    | 'retry'
-    | 'failed'
-    | 'invalid-origin'
-    | 'invalid-timeout'
-    | 'invalid-size'
-    | 'creating';
+      | 'ready'
+      | 'retry'
+      | 'failed'
+      | 'invalid-origin'
+      | 'invalid-timeout'
+      | 'invalid-size'
+      | 'creating';
     size: number;
     created: string;
   };
