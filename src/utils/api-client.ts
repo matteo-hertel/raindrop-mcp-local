@@ -154,6 +154,137 @@ export class RaindropAPI {
     }
     return `${this.token.slice(0, 4)}...${this.token.slice(-4)}`;
   }
+
+  /**
+   * Make HTTP request with full response details
+   * Returns response data, headers, and status code
+   */
+  async requestWithDetails(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<{ data: any; headers: Record<string, string>; status: number }> {
+    const url = `${this.baseUrl}${endpoint}`;
+
+    const config: RequestInit = {
+      ...options,
+      redirect: 'manual', // Don't follow redirects automatically
+      headers: {
+        ...this.getHeaders(),
+        ...options.headers,
+      },
+    };
+
+    try {
+      const response = await fetch(url, config);
+
+      // Convert Headers to plain object
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+
+      // Handle different response types
+      const contentType = response.headers.get('content-type');
+      let data;
+
+      if (response.status === 307) {
+        // For redirects, return minimal data with redirect flag
+        data = { redirect: true };
+      } else if (contentType?.includes('application/json')) {
+        data = await response.json();
+      } else {
+        data = await response.text();
+      }
+
+      return {
+        data,
+        headers,
+        status: response.status,
+      };
+    } catch (error) {
+      throw new RaindropAPIError(
+        `Request failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * Get document file for a raindrop (for document type raindrops)
+   * Returns the file content as base64 or throws an error
+   */
+  async getDocumentFile(raindropId: number): Promise<{
+    content: string; // base64 encoded
+    contentType: string;
+    size: number;
+  }> {
+    const fileEndpoint = `https://api.raindrop.io/rest/v1/raindrop/${raindropId}/file`;
+    
+    const response = await fetch(fileEndpoint, {
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'User-Agent': 'raindrop-mcp-server/0.1.0'
+      },
+      redirect: 'manual'
+    });
+
+    if (response.status === 307) {
+      const signedUrl = response.headers.get('location');
+      
+      if (signedUrl && signedUrl.includes('amazonaws.com')) {
+        // Download the file from the signed URL
+        const downloadResponse = await fetch(signedUrl);
+        
+        if (downloadResponse.ok) {
+          const arrayBuffer = await downloadResponse.arrayBuffer();
+          const contentType = downloadResponse.headers.get('content-type') || 'application/octet-stream';
+          const base64Content = Buffer.from(arrayBuffer).toString('base64');
+          
+          return {
+            content: base64Content,
+            contentType,
+            size: arrayBuffer.byteLength
+          };
+        } else {
+          throw new RaindropAPIError(`Failed to download document: ${downloadResponse.status} ${downloadResponse.statusText}`);
+        }
+      } else {
+        throw new RaindropAPIError('Could not get signed URL for document download');
+      }
+    } else {
+      throw new RaindropAPIError(`Unexpected response from file endpoint: ${response.status}`);
+    }
+  }
+
+  /**
+   * Get cached content for a raindrop (for non-document type raindrops)
+   * Returns the cached HTML content as a string or throws an error
+   */
+  async getCachedContent(raindropId: number): Promise<string> {
+    const cacheEndpoint = `/raindrop/${raindropId}/cache`;
+    
+    // Use requestWithDetails to handle the 307 redirect
+    const response = await this.requestWithDetails(cacheEndpoint);
+    
+    if (response.status === 307) {
+      const signedUrl = response.headers.location;
+      
+      if (signedUrl) {
+        // Follow the redirect to get the cached content
+        const downloadResponse = await fetch(signedUrl);
+        
+        if (downloadResponse.ok) {
+          const content = await downloadResponse.text();
+          return content;
+        } else {
+          throw new RaindropAPIError(`Failed to retrieve cached content: ${downloadResponse.status} ${downloadResponse.statusText}`);
+        }
+      } else {
+        throw new RaindropAPIError('Could not get signed URL for cached content');
+      }
+    } else {
+      throw new RaindropAPIError(`Unexpected response from cache endpoint: ${response.status}`);
+    }
+  }
 }
 
 /**

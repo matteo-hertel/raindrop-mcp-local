@@ -5,17 +5,17 @@ import type { ApiResponse } from '../../types';
 
 // Define the schema for tool parameters
 export const schema = {
-  id: z.number().describe('The ID of the raindrop to get permanent copy for'),
+  id: z.number().describe('The ID of the raindrop to get permanent copy link for'),
 };
 
 // Define tool metadata
 export const metadata: ToolMetadata = {
-  name: 'get_permanent_copy',
+  name: 'get_permanent_copy_link',
   description:
-    'Get permanent copy/cache of a raindrop. For documents, returns the file as base64. For webpages, returns cached content.',
+    'Get permanent copy/cache link of a raindrop. For documents, returns the signed download URL. For webpages, returns the signed cached content URL.',
   annotations: {
-    title: 'Get Permanent Copy',
-    readOnlyHint: false,
+    title: 'Get Permanent Copy Link',
+    readOnlyHint: true,
     destructiveHint: false,
     idempotentHint: true,
   },
@@ -41,7 +41,7 @@ interface PermanentCopyResponse {
 }
 
 // Tool implementation
-export default async function getPermanentCopy({
+export default async function getPermanentCopyLink({
   id,
 }: InferSchema<typeof schema>) {
   try {
@@ -56,63 +56,88 @@ export default async function getPermanentCopy({
 
     const raindrop = raindropResponse.item;
 
-    // Handle document types - download the file directly
+    // Handle document types - get the signed URL directly
     if (raindrop.type === 'document') {
       try {
-        const documentFile = await apiClient.getDocumentFile(id);
+        const fileEndpoint = `https://api.raindrop.io/rest/v1/raindrop/${id}/file`;
+        
+        const response = await fetch(fileEndpoint, {
+          headers: {
+            'Authorization': `Bearer ${process.env.RAINDROP_TOKEN}`,
+            'User-Agent': 'raindrop-mcp-server/0.1.0'
+          },
+          redirect: 'manual'
+        });
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text:
-                `Document retrieved successfully!\n\n` +
-                `• Title: ${raindrop.title}\n` +
-                `• Type: ${documentFile.contentType}\n` +
-                `• Size: ${documentFile.size.toLocaleString()} bytes\n` +
-                `• Original URL: ${raindrop.link}\n\n` +
-                `Base64 encoded content:\n${documentFile.content}\n\n` +
-                `[Full base64 content is ${documentFile.content.length} characters]`,
-            },
-          ],
-        };
+        if (response.status === 307) {
+          const signedUrl = response.headers.get('location');
+          
+          if (signedUrl && signedUrl.includes('amazonaws.com')) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Document download link retrieved successfully!\n\n` +
+                        `• Title: ${raindrop.title}\n` +
+                        `• Type: Document\n` +
+                        `• Original URL: ${raindrop.link}\n\n` +
+                        `**Signed Download URL:**\n${signedUrl}\n\n` +
+                        `This is a temporary signed URL that provides direct access to the document file. ` +
+                        `The URL includes AWS signature parameters and will expire after a certain time period.`,
+                },
+              ],
+            };
+          } else {
+            throw new Error('Could not get signed URL for document download');
+          }
+        } else {
+          throw new Error(`Unexpected response from file endpoint: ${response.status}`);
+        }
       } catch (error) {
         return {
           content: [
             {
               type: 'text',
-              text:
-                `Error downloading document: ${error instanceof Error ? error.message : String(error)}\n\n` +
-                `Note: Document downloads require a valid Pro subscription.`,
+              text: `Error getting document link: ${error instanceof Error ? error.message : String(error)}\n\n` +
+                    `Note: Document downloads require a valid Pro subscription.`,
             },
           ],
         };
       }
     }
 
-    // Handle non-document types - get cached content
+    // Handle non-document types - get cached content link
     if (raindrop.cache && raindrop.cache.status === 'ready') {
       const cacheInfo = raindrop.cache;
       const sizeInMB = (cacheInfo.size / (1024 * 1024)).toFixed(2);
 
       try {
-        // Get cached content using the new getCachedContent method
-        const cachedContent = await apiClient.getCachedContent(id);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text:
-                `Permanent copy content for "${raindrop.title}":\n\n` +
-                `• Status: ${cacheInfo.status}\n` +
-                `• Size: ${sizeInMB} MB\n` +
-                `• Created: ${cacheInfo.created}\n` +
-                `• Source URL: ${raindrop.link}\n\n` +
-                `--- CACHED CONTENT ---\n${cachedContent}`,
-            },
-          ],
-        };
+        // Get the signed URL for cached content
+        const response = await apiClient.requestWithDetails(`/raindrop/${id}/cache`);
+        
+        if (response.status === 307 && response.headers.location) {
+          const signedUrl = response.headers.location;
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `Cached content link retrieved successfully!\n\n` +
+                  `• Title: ${raindrop.title}\n` +
+                  `• Status: ${cacheInfo.status}\n` +
+                  `• Size: ${sizeInMB} MB\n` +
+                  `• Created: ${cacheInfo.created}\n` +
+                  `• Source URL: ${raindrop.link}\n\n` +
+                  `**Signed Cache URL:**\n${signedUrl}\n\n` +
+                  `This is a temporary signed URL that provides direct access to the cached webpage content. ` +
+                  `The URL includes signature parameters and will expire after a certain time period.`,
+              },
+            ],
+          };
+        } else {
+          throw new Error(`Unexpected response from cache endpoint: ${response.status}`);
+        }
       } catch (error) {
         // Fallback to cache info only
         return {
@@ -125,7 +150,7 @@ export default async function getPermanentCopy({
                 `• Size: ${sizeInMB} MB\n` +
                 `• Created: ${cacheInfo.created}\n` +
                 `• Source URL: ${raindrop.link}\n\n` +
-                `Cache is available but content could not be retrieved.`,
+                `Cache is available but signed URL could not be retrieved.`,
             },
           ],
         };
@@ -178,7 +203,7 @@ export default async function getPermanentCopy({
     switch (cache.status) {
       case 'ready':
         const sizeInMB = (cache.size / (1024 * 1024)).toFixed(2);
-        statusMessage = `✅ Permanent copy is ready!\n• Size: ${sizeInMB} MB\n• Created: ${cache.created}`;
+        statusMessage = `✅ Permanent copy is ready!\n• Size: ${sizeInMB} MB\n• Created: ${cache.created}\n\nRun this command again to get the signed URL.`;
         break;
       case 'creating':
         statusMessage = `⏳ Permanent copy is being created. This may take a few moments.\n• Check back later to see when it's ready.`;
